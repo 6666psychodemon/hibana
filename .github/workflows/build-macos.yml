@@ -12,7 +12,7 @@ jobs:
       ART: build/Hibana_artefacts/Release
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v5
 
       - name: Configure (universal binary, Apple Silicon + Intel)
         run: >
