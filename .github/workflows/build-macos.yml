@@ -1,0 +1,64 @@
+name: Build macOS
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      ART: build/Hibana_artefacts/Release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (universal binary, Apple Silicon + Intel)
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build plugins
+        run: cmake --build build --parallel 4 --target Hibana_VST3 Hibana_AU Hibana_Standalone hibana_render
+
+      - name: Engine tests (renders every preset, stress + resonance checks)
+        run: ./build/hibana_render build
+
+      - name: Sign (ad-hoc, required for Apple Silicon)
+        run: |
+          for b in "$ART/VST3/Hibana.vst3" "$ART/AU/Hibana.component" "$ART/Standalone/Hibana.app"; do
+            codesign --force --deep --sign - "$b"
+            codesign --verify --deep --strict "$b"
+          done
+
+      - name: Apple AU validation (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "$ART/AU/Hibana.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aumu Hbn1 Dmon
+
+      - name: pluginval (VST3)
+        continue-on-error: true
+        run: |
+          curl -sL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --timeout-ms 300000 --validate "$ART/VST3/Hibana.vst3"
+
+      - name: Package
+        run: |
+          mkdir -p dist/Hibana-macOS
+          cp -R "$ART/VST3/Hibana.vst3" "$ART/AU/Hibana.component" "$ART/Standalone/Hibana.app" dist/Hibana-macOS/
+          cp scripts/install.sh dist/Hibana-macOS/
+          cp build/hibana_demo.wav dist/Hibana-macOS/ || true
+          ditto -c -k --keepParent dist/Hibana-macOS dist/Hibana-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hibana-macOS
+          path: dist/Hibana-macOS.zip
